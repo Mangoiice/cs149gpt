@@ -205,7 +205,74 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
     std::vector<float> QK_t = formatTensor(QK_tTensor);
 
     // -------- YOUR CODE HERE  -------- //
+    int tileSize = 16;
+                    
+    for(int b = 0; b < B; ++b)
+    {
+        for(int h = 0; h < H; ++h)
+        {
+            // 将Q K 分块
+            int numTilesPerRow = (d + tileSize - 1) / tileSize;
+            int numTilesPerCol = (N + tileSize - 1) / tileSize;
+            int numTiles = numTilesPerRow * numTilesPerCol;
+            for(int tileIndex = 0; tileIndex < numTiles; ++tileIndex)
+            {
+                // 对于每一个tile，计算在Q内的行起始 K内的行起始(未转置) 得出可以计算的QK^T的元素范围
+                int rowBegin = (tileIndex / numTilesPerRow) * tileSize;
+                int rowEnd = std::min(N, rowBegin + tileSize);
+                int colBegin = (tileIndex / numTilesPerRow) * tileSize;
+                int colEnd = std::min(N, colBegin + tileSize);
+                
+                // 生成QK^T矩阵的(i, j)元素
+                for(int i = rowBegin; i < rowEnd; ++i)
+                {
+                    for(int j = colBegin; j < colEnd; ++j)
+                    {
+                        float val = twoDimRead(QK_t, i, k, N);
+                        // 遍历Q矩阵的第i行和K矩阵的第j列
+                        for(int k = 0; k < min(tileSize, d); ++k)
+                            val += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
+                        // 写入
+                        twoDimWrite(QK_t, i, j, N, val);
+                    }
+                }
+            }
+            
+            // 对每一行进行softmax
+            for(int i = 0; i < N; ++i)
+            {
+                float lx = 0.0;
+                for(int j = 0; j < N; ++j)
+                {
+                    float val = twoDimRead(QK_t, i, j, N);
+                    val = std::exp(val);
+                    lx += val;
+                    twoDimWrite(QK_t, i, j, N, val);
+                }
+                for(int j = 0; j < N; ++j)
+                {
+                    float val = twoDimRead(QK_t, i, j, N);
+                    val /= lx;
+                    twoDimWrite(QK_t, i, j, N, val);
+                }
+            }
+            
+            // QK^T(N * N) * V(N * d)
+            for(int i = 0; i < N; ++i)
+            {
+                for(int j = 0; j < d; ++j)
+                {
+                    float val = 0.0;
+                    // 遍历QK^T矩阵的第i行和V矩阵的第j列
+                    for(int k = 0; k < N; ++k)
+                        val += twoDimRead(QK_t, i, k, N) * fourDimRead(V, b, h, k, j, H, N, d);
+                    // 写入
+                    fourDimWrite(O, b, h, i, j, H, N, d, val);
+                }
+            }
 
+        }
+    }
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
