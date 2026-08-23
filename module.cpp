@@ -212,27 +212,29 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
         for(int h = 0; h < H; ++h)
         {
             // 将Q K 分块
-            int numTilesPerRow = (d + tileSize - 1) / tileSize;
-            int numTilesPerCol = (N + tileSize - 1) / tileSize;
-            int numTiles = numTilesPerRow * numTilesPerCol;
+            int numRowTiles = (d + tileSize - 1) / tileSize;
+            int numColTiles = (N + tileSize - 1) / tileSize;
+            int numTiles = numRowTiles * numColTiles;
             for(int tileIndex = 0; tileIndex < numTiles; ++tileIndex)
             {
-                // 对于每一个tile，计算在Q内的行起始 K内的行起始(未转置) 得出可以计算的QK^T的元素范围
-                int rowBegin = (tileIndex / numTilesPerRow) * tileSize;
-                int rowEnd = std::min(N, rowBegin + tileSize);
-                int colBegin = (tileIndex / numTilesPerRow) * tileSize;
-                int colEnd = std::min(N, colBegin + tileSize);
-                
-                // 生成QK^T矩阵的(i, j)元素
-                for(int i = rowBegin; i < rowEnd; ++i)
+                // 对于该tile Q的行列起始 K的行列起始 
+                int rowBeginQ = (tileIndex / numRowTiles) * tileSize;
+                int rowEndQ = min(N, rowBegin + tileSize);
+                int colBeginQ = (tileIndex % numRowTiles) * tileSize;
+                int colEndQ = min(d, rowBegin + tileSize);
+
+                int rowBeginK = (tileIndex / numRowTiles) * tileSize;
+                int rowEndK = min(N, rowBegin + tileSize);
+                int colBeginK = (tileIndex % numRowTiles) * tileSize;
+                int colEndK = min(d, rowBegin + tileSize);
+
+                for(int i = rowBeginQ; i < rowEndQ; ++i)
                 {
-                    for(int j = colBegin; j < colEnd; ++j)
+                    for(int j = rowBeginK; j < rowEndK; ++j)
                     {
-                        float val = twoDimRead(QK_t, i, k, N);
-                        // 遍历Q矩阵的第i行和K矩阵的第j列
-                        for(int k = 0; k < min(tileSize, d); ++k)
+                        float val = twoDimRead(QK_t, i, j, N);
+                        for(int k = colBeginK; k < colEndK; ++k)
                             val += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
-                        // 写入
                         twoDimWrite(QK_t, i, j, N, val);
                     }
                 }
@@ -258,6 +260,34 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
             }
             
             // QK^T(N * N) * V(N * d)
+            // 将QK^T V 分块
+            int numRowTiles = (d + tileSize - 1) / tileSize;
+            int numColTiles = (N + tileSize - 1) / tileSize;
+            int numTiles = numRowTiles * numColTiles;
+            for(int tileIndex = 0; tileIndex < numTiles; ++tileIndex)
+            {
+                // 对于该tile Q的行列起始 K的行列起始 
+                int rowBeginQ = (tileIndex / numRowTiles) * tileSize;
+                int rowEndQ = min(N, rowBegin + tileSize);
+                int colBeginQ = (tileIndex % numRowTiles) * tileSize;
+                int colEndQ = min(d, rowBegin + tileSize);
+
+                int rowBeginK = (tileIndex / numRowTiles) * tileSize;
+                int rowEndK = min(N, rowBegin + tileSize);
+                int colBeginK = (tileIndex % numRowTiles) * tileSize;
+                int colEndK = min(d, rowBegin + tileSize);
+
+                for(int i = rowBeginQ; i < rowEndQ; ++i)
+                {
+                    for(int j = rowBeginK; j < rowEndK; ++j)
+                    {
+                        float val = twoDimRead(QK_t, i, j, N);
+                        for(int k = colBeginK; k < colEndK; ++k)
+                            val += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
+                        twoDimWrite(QK_t, i, j, N, val);
+                    }
+                }
+            }
             for(int i = 0; i < N; ++i)
             {
                 for(int j = 0; j < d; ++j)
