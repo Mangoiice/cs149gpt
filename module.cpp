@@ -339,7 +339,7 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
                 {
                     float val = ORow[j];
                     ORow[j] = std::exp(val);
-                    lx += val;
+                    lx += ORow[j];
                 }
                 for(int j = 0; j < N; ++j)
                     ORow[j] /= lx;
