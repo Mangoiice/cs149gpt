@@ -205,7 +205,7 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
     std::vector<float> QK_t = formatTensor(QK_tTensor);
 
     // -------- YOUR CODE HERE  -------- //
-    int tileSize = 16;
+    int tileSize = 256;
                     
     for(int b = 0; b < B; ++b)
     {
@@ -317,12 +317,41 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
 
         //loop over heads
         for (int h = 0; h < H; h++){
+            #pragma omp parallel for
             for (int i = 0; i < N ; i++){
 
 		// YRow is moved inside so each OpenMP thread gets a local copy.
                 at::Tensor ORowTensor = temp.index({torch::indexing::Slice(omp_get_thread_num(), torch::indexing::None)});      
                 std::vector<float> ORow = formatTensor(ORowTensor);
 		//YOUR CODE HERE
+                // 将Q的第i行依次与K的所有行相乘，填入ORow
+                for(int j = 0; j < N; ++j)
+                {
+                    float val = 0.0;
+                    for(int k = 0; k < d; ++k)
+                        val += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
+                    ORow[j] = val;
+                }
+
+                // softmax
+                float lx = 0.0;
+                for(int j = 0; j < N; ++j)
+                {
+                    float val = ORow[j];
+                    ORow[j] = std::exp(val);
+                    lx += val;
+                }
+                for(int j = 0; j < N; ++j)
+                    ORow[j] /= lx;
+
+                // ORow * V(N * d)
+                for(int j = 0; j < d; ++j)
+                {
+                    float val = 0.0;
+                    for(int k = 0; k < N; ++k)
+                        val += ORow[k] * fourDimRead(V, b, h, k, j, H, N, d);
+                    fourDimWrite(O, b, h, i, j, H, N, d, val);
+                }
             }
 	}
     }
