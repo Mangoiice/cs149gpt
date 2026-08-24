@@ -218,12 +218,15 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
                 {
                     for(int kBlock = 0; kBlock < d; kBlock += tileSize)
                     {
-                        for(int i = iBlock; i < min(N, iBlock + tileSize); ++i)
+                        int iUpper = std::min(N, iBlock + tileSize);
+                        int jUpper = std::min(N, jBlock + tileSize);
+                        int kUpper = std::min(d, kBlock + tileSize);
+                        for(int i = iBlock; i < iUpper; ++i)
                         {
-                            for(int j = jBlock; j < min(N, jBlock + tileSize); ++j)
+                            for(int j = jBlock; j < jUpper; ++j)
                             {
                                 float val = twoDimRead(QK_t, i, j, N);
-                                for(int k = kBlock; k < min(d, kBlock + tileSize; ++k))  
+                                for(int k = kBlock; k < kUpper; ++k)  
                                     val += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
                                 twoDimWrite(QK_t, i, j, N, val);
                             }
@@ -258,12 +261,15 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
                 {
                     for(int kBlock = 0; kBlock < N; kBlock += tileSize)
                     {
-                        for(int i = iBlock; i < min(N, iBlock + tileSize); ++i)
+                        int iUpper = std::min(N, iBlock + tileSize);
+                        int jUpper = std::min(d, jBlock + tileSize);
+                        int kUpper = std::min(N, kBlock + tileSize);
+                        for(int i = iBlock; i < iUpper; ++i)
                         {
-                            for(int j = jBlock; j < min(d, jBlock + tileSize); ++j)
+                            for(int j = jBlock; j < jUpper; ++j)
                             {
                                 float val = fourDimRead(O, b, h, i, j, H, N, d);
-                                for(int k = kBlock; k < min(N, kBlock + tileSize; ++k))
+                                for(int k = kBlock; k < kUpper; ++k)
                                     val += twoDimRead(QK_t, i, k, N) * fourDimRead(V, b, h, k, j, H, N, d);
                                 fourDimWrite(O, b, h, i, j, H, N, d, val);
                             }
@@ -271,7 +277,6 @@ torch::Tensor myUnfusedAttentionBlocked(torch::Tensor QTensor, torch::Tensor KTe
                     } 
                 }
             }
-
         }
     }
     // DO NOT EDIT THIS RETURN STATEMENT //
