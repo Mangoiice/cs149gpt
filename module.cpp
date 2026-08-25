@@ -402,7 +402,33 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
     std::vector<float> lnew = formatTensor(LnewTensor);
 
     // -------- YOUR CODE HERE  -------- //
-
+    for(int b = 0; b < B; ++b)
+    {
+        for(int h = 0; h < H; ++h)
+        {
+            for(int jBlock = 0; jBlock < N; jBlock += Bc)
+            {
+                for(int iBlock = 0; iBlock < N; iBlock += Br)
+                {
+                    for(int j = jBlock; j < std::min(N, jBlock + Bc); ++j)
+                    {
+                        for(int i = iBlock; i < std::min(N, iBlock + Br); ++i)
+                        {
+                            float qktVal = 0.0;
+                            for(int k = 0; k < d; ++k)             
+                                qktVal += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
+                            twoDimWrite(Sij, i, j, Bc, qktVal);
+                            twoDimWrite(Pij, i, j, Bc, std::exp(qktVal));
+                            lij[i] =  twoDimRead(Pij, i, j, Bc);
+                            lnew[i] = l[i] + lij[i];
+                            float oldOiVal = twoDimRead(Oi, i, j, d);
+                            
+                        }
+                    }
+                }
+            }
+        }
+    }
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
