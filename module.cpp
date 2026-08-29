@@ -405,6 +405,9 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
     {
         for (int h = 0; h < H; ++h)
         {
+            // 每个 (b,h) 用独立的行和状态：L 只有 N 个元素，跨 head 共享，必须清零
+            for (int i = 0; i < N; ++i)
+                l[i] = 0.0f;
             for (int jBlock = 0; jBlock < N; jBlock += Bc)
             {
                 int jc = std::min(Bc, N - jBlock);
