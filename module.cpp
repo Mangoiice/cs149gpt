@@ -410,6 +410,7 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
             {
                 for(int iBlock = 0; iBlock < N; iBlock += Br)
                 {
+                    // 计算分块矩阵的乘积
                     for(int j = jBlock; j < std::min(N, jBlock + Bc); ++j)
                     {
                         for(int i = iBlock; i < std::min(N, iBlock + Br); ++i)
@@ -417,12 +418,26 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
                             float qktVal = 0.0;
                             for(int k = 0; k < d; ++k)             
                                 qktVal += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
-                            twoDimWrite(Sij, i, j, Bc, qktVal);
-                            twoDimWrite(Pij, i, j, Bc, std::exp(qktVal));
-                            lij[i] =  twoDimRead(Pij, i, j, Bc);
-                            lnew[i] = l[i] + lij[i];
-                            float oldOiVal = twoDimRead(Oi, i, j, d);
-                            
+                            twoDimWrite(Sij, i - iBlock, j - jBlock, Bc, qktVal);
+                            twoDimWrite(Pij, i - iBlock, j - jBlock, Bc, std::exp(qktVal));
+                            // 累加新的lij
+                            lij[i - iBlock] += twoDimRead(Pij, i - iBlock, j - jBlock, Bc);
+                        }
+                    }
+                    // 计算新l
+                    for(int i = 0; i < Br; ++i)
+                        lnew[i] = l[i] + lij[i];
+                    // 根据旧l缩放原数据，再用新l计算
+                    for(int j = 0; j < d; ++j)
+                    {
+                        for(int i = iBlock; i < std::min(N, iBlock + Br); ++i)
+                        {
+                            float val = 0.0;
+                            for(int k = jBlock; k < std::min(N, jBlock + Bc); ++k)
+                                val += twoDimRead(Pij, i - iBlock, k - jBlock, Bc) * fourDimRead(V, b, h, k, j, H, N, d);
+                            float val2 = fourDimRead(O, b, h, i, j, H, N, d);
+                            val2 = (val2 * l[i] + val) / lnew[i];
+                            fourDimWrite(O, b, h, i, j, H, N, d, val2);
                         }
                     }
                 }
