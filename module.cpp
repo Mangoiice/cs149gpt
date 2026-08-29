@@ -15,24 +15,23 @@
 // ------------------------------------ //
 
 // Step #1: Understand Read/Write Accessors for a 2D Tensor
-inline float twoDimRead(std::vector<float> &tensor, int &x, int &y, const int &sizeX) {
-    // Note that sizeX is the size of a Row, not the number of rows
-    return tensor[x * (sizeX)+ y];
+inline float twoDimRead(std::vector<float> &tensor, const int &x, const int &y, const int &sizeX) {
+    return tensor[x * sizeX + y];
 }
 
-inline void twoDimWrite(std::vector<float> &tensor, int &x, int &y, const int &sizeX, float &val) {
-    tensor[x * (sizeX) + y] = val;
+inline void twoDimWrite(std::vector<float> &tensor, const int &x, const int &y, const int &sizeX, const float &val) {
+    tensor[x * sizeX + y] = val;
 }
 
 // Step #2: Implement Read/Write Accessors for a 4D Tensor
-inline float fourDimRead(std::vector<float> &tensor, int &x, int &y, int &z, int &b, 
+inline float fourDimRead(std::vector<float> &tensor, const int &x, const int &y, const int &z, const int &b,
         const int &sizeX, const int &sizeY, const int &sizeZ) {
     return tensor[x * (sizeX * sizeY * sizeZ) + y * (sizeY * sizeZ) + z * sizeZ + b];
 }
 
-inline void fourDimWrite(std::vector<float> &tensor, int &x, int &y, int &z, int &b, 
-        const int &sizeX, const int &sizeY, const int &sizeZ, float &val) {
-    tensor[x * (sizeX * sizeY * sizeZ) + y * (sizeY * sizeZ) + z * sizeZ + b] = val; 
+inline void fourDimWrite(std::vector<float> &tensor, const int &x, const int &y, const int &z, const int &b,
+        const int &sizeX, const int &sizeY, const int &sizeZ, const float &val) {
+    tensor[x * (sizeX * sizeY * sizeZ) + y * (sizeY * sizeZ) + z * sizeZ + b] = val;
 }
 
 // DO NOT EDIT THIS FUNCTION //
@@ -402,43 +401,83 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
     std::vector<float> lnew = formatTensor(LnewTensor);
 
     // -------- YOUR CODE HERE  -------- //
-    for(int b = 0; b < B; ++b)
+    for (int b = 0; b < B; ++b)
     {
-        for(int h = 0; h < H; ++h)
+        for (int h = 0; h < H; ++h)
         {
-            for(int jBlock = 0; jBlock < N; jBlock += Bc)
+            for (int jBlock = 0; jBlock < N; jBlock += Bc)
             {
-                for(int iBlock = 0; iBlock < N; iBlock += Br)
+                int jc = std::min(Bc, N - jBlock);
+
+                // Load Kj, Vj into local memory blocks（伪代码第 14 行）
+                for (int jj = 0; jj < jc; ++jj)
                 {
-                    // 计算分块矩阵的乘积
-                    for(int j = jBlock; j < std::min(N, jBlock + Bc); ++j)
+                    for (int k = 0; k < d; ++k)
                     {
-                        for(int i = iBlock; i < std::min(N, iBlock + Br); ++i)
+                        twoDimWrite(Kj, jj, k, d,
+                                    fourDimRead(K, b, h, jBlock + jj, k, H, N, d));
+                        twoDimWrite(Vj, jj, k, d,
+                                    fourDimRead(V, b, h, jBlock + jj, k, H, N, d));
+                    }
+                }
+
+                for (int iBlock = 0; iBlock < N; iBlock += Br)
+                {
+                    int ic = std::min(Br, N - iBlock);
+
+                    // Load Qi, Oi, li into local memory blocks（伪代码第 17 行）
+                    for (int ii = 0; ii < ic; ++ii)
+                    {
+                        li[ii] = l[iBlock + ii];          // 从 L 读回旧行和
+                        for (int k = 0; k < d; ++k)
                         {
-                            float qktVal = 0.0;
-                            for(int k = 0; k < d; ++k)             
-                                qktVal += fourDimRead(Q, b, h, i, k, H, N, d) * fourDimRead(K, b, h, j, k, H, N, d);
-                            twoDimWrite(Sij, i - iBlock, j - jBlock, Bc, qktVal);
-                            twoDimWrite(Pij, i - iBlock, j - jBlock, Bc, std::exp(qktVal));
-                            // 累加新的lij
-                            lij[i - iBlock] += twoDimRead(Pij, i - iBlock, j - jBlock, Bc);
+                            twoDimWrite(Qi, ii, k, d,
+                                        fourDimRead(Q, b, h, iBlock + ii, k, H, N, d));
+                            twoDimWrite(Oi, ii, k, d,
+                                        fourDimRead(O, b, h, iBlock + ii, k, H, N, d));
                         }
                     }
-                    // 计算新l
-                    for(int i = 0; i < Br; ++i)
-                        lnew[i] = l[i] + lij[i];
-                    // 根据旧l缩放原数据，再用新l计算
-                    for(int j = 0; j < d; ++j)
+
+                    // 每个块开始时清零 lij
+                    for (int ii = 0; ii < ic; ++ii)
+                        lij[ii] = 0.0f;
+
+                    // Sij = Qi @ Kj^T；Pij = exp(Sij)；lij = rowsum(Pij)
+                    for (int ii = 0; ii < ic; ++ii)
                     {
-                        for(int i = iBlock; i < std::min(N, iBlock + Br); ++i)
+                        for (int jj = 0; jj < jc; ++jj)
                         {
-                            float val = 0.0;
-                            for(int k = jBlock; k < std::min(N, jBlock + Bc); ++k)
-                                val += twoDimRead(Pij, i - iBlock, k - jBlock, Bc) * fourDimRead(V, b, h, k, j, H, N, d);
-                            float val2 = fourDimRead(O, b, h, i, j, H, N, d);
-                            val2 = (val2 * l[i] + val) / lnew[i];
-                            fourDimWrite(O, b, h, i, j, H, N, d, val2);
+                            float s = 0.0f;
+                            for (int k = 0; k < d; ++k)
+                                s += twoDimRead(Qi, ii, k, d) * twoDimRead(Kj, jj, k, d);
+                            twoDimWrite(Sij, ii, jj, Bc, s);
+                            float p = std::exp(s);
+                            twoDimWrite(Pij, ii, jj, Bc, p);
+                            lij[ii] += p;
                         }
+                    }
+
+                    // lnew = li + lij；Oi = (li*Oi + PV) / lnew（伪代码第 18–19 行）
+                    for (int ii = 0; ii < ic; ++ii)
+                    {
+                        lnew[ii] = li[ii] + lij[ii];
+                        for (int j = 0; j < d; ++j)
+                        {
+                            float pv = 0.0f;
+                            for (int jj = 0; jj < jc; ++jj)
+                                pv += twoDimRead(Pij, ii, jj, Bc) * twoDimRead(Vj, jj, j, d);
+                            float oi = li[ii] * twoDimRead(Oi, ii, j, d) + pv;
+                            twoDimWrite(Oi, ii, j, d, oi / lnew[ii]);
+                        }
+                    }
+
+                    // Write Oi and lnew back to O and l（伪代码第 20 行）
+                    for (int ii = 0; ii < ic; ++ii)
+                    {
+                        l[iBlock + ii] = lnew[ii];
+                        for (int j = 0; j < d; ++j)
+                            fourDimWrite(O, b, h, iBlock + ii, j, H, N, d,
+                                         twoDimRead(Oi, ii, j, d));
                     }
                 }
             }
